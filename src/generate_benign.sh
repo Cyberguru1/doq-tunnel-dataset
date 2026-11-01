@@ -18,7 +18,7 @@ RESOLVER_PORT=853
 cleanup() {
   kill "$CAPTURE_PID" "$RESOLVER_PID" 2>/dev/null || true
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 # DoQ resolver on loopback
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \

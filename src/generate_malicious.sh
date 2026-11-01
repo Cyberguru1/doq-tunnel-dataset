@@ -44,7 +44,7 @@ esac
 cleanup() {
   kill "$CAPTURE_PID" "$CLIENT_PID" "$RESOLVER_PID" "$SERVER_PID" "$SINK_PID" 2>/dev/null || true
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 # 0) keypair
 "$DNSTT_SERVER" -gen-key -privkey-file server.key -pubkey-file server.pub
@@ -82,7 +82,7 @@ CAPTURE_PID=$!
 # 5) push real data through the tunnel (sustained, bidirectional)
 END=$((SECONDS + SECONDS_RUN))
 while [ "$SECONDS" -lt "$END" ]; do
-  curl -s "http://127.0.0.1:$CLIENT_LOCAL_PORT/" -o /dev/null || true
+  curl -s --max-time 5 "http://127.0.0.1:$CLIENT_LOCAL_PORT/" -o /dev/null || true
   sleep 1
 done
 
