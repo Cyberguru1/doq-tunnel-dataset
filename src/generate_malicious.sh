@@ -43,6 +43,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# ensure no stale processes from earlier runs
+for p in dnstt-server dnstt-client dnsproxy http.server tcpdump; do
+  pkill -9 -f "$p" 2>/dev/null || true
+done
+
 # 0) keypair
 "$DNSTT_SERVER" -gen-key -privkey-file server.key -pubkey-file server.pub
 
@@ -50,7 +55,7 @@ trap cleanup EXIT INT TERM
 python3 -m http.server "$SINK_PORT" >/dev/null 2>&1 &
 SINK_PID=$!
 sleep 1
-"$DNSTT_SERVER" -udp "127.0.0.1:$TUNNEL_SERVER_PORT" -privkey-file server.key -mtu 1150 \
+"$DNSTT_SERVER" -udp "127.0.0.1:$TUNNEL_SERVER_PORT" -privkey-file server.key -mtu 1000 \
   "${FEC[@]}" "${COMPRESS[@]}" -kcp-mode "$KCP" \
   "$ZONE" "127.0.0.1:$SINK_PORT" &
 SERVER_PID=$!
