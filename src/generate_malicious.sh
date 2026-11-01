@@ -52,7 +52,8 @@ trap cleanup EXIT INT TERM
 # 1) tunnel server (authoritative NS for ZONE) -> local TCP sink
 python3 -m http.server "$SINK_PORT" >/dev/null 2>&1 &
 SINK_PID=$!
-"$DNSTT_SERVER" -udp "127.0.0.1:$TUNNEL_SERVER_PORT" -privkey-file server.key \
+sleep 1
+"$DNSTT_SERVER" -udp "127.0.0.1:$TUNNEL_SERVER_PORT" -privkey-file server.key -mtu 1150 \
   "${FEC[@]}" "${COMPRESS[@]}" -kcp-mode "$KCP" \
   "$ZONE" "127.0.0.1:$SINK_PORT" &
 SERVER_PID=$!
@@ -61,7 +62,7 @@ SERVER_PID=$!
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
   -keyout key.pem -out cert.pem -days 30 -nodes \
   -subj "/CN=localhost" -addext "subjectAltName=IP:127.0.0.1" >/dev/null 2>&1
-"$DNSPROXY" -l 127.0.0.1 --quic-port="$RESOLVER_PORT" \
+"$DNSPROXY" -l 127.0.0.1 --quic-port="$RESOLVER_PORT" --udp-buf-size=4096 \
   --tls-crt=cert.pem --tls-key=key.pem \
   -u "[/$ZONE/]127.0.0.1:$TUNNEL_SERVER_PORT" -u 8.8.8.8:53 -p 0 &
 RESOLVER_PID=$!
