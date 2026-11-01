@@ -32,7 +32,7 @@ import json
 
 import pandas as pd
 
-from extract_features import FEATURE_COLS, extract_features, ieee_to_events, pcap_to_events
+from extract_features import FEATURE_COLS, doq_jsonl_to_events, extract_features, ieee_to_events, pcap_to_events
 
 LABEL_COLS = ["class", "tool", "source"]
 
@@ -57,6 +57,8 @@ def build(config):
                 events += pcap_to_events(p)
             elif kind == "ieee_csv":
                 events += ieee_to_events(p)
+            elif kind == "doq_jsonl":
+                events += doq_jsonl_to_events(p)
             else:
                 raise ValueError(f"unknown kind: {kind}")
 

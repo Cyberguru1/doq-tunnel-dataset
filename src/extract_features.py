@@ -29,6 +29,7 @@ columns.
 """
 
 import hashlib
+import json
 
 import numpy as np
 import pandas as pd
@@ -94,6 +95,42 @@ def ieee_to_events(path, doq_only=True):
             "src_ip": str(row["src_ip"]), "src_port": int(row["src_port"]),
             "dst_ip": str(row["dst_ip"]), "dst_port": int(row["dst_port"]),
         })
+    return events
+
+
+def doq_jsonl_to_events(path):
+    """Read a website-fingerprinting-doq JSONL file into synthetic packet events.
+
+    Each line is one page visit; its "events" are per-query records with
+    q_wire/r_wire (query/response DNS wire sizes) and t_ms/rtt_ms timings.
+    Each query is mapped to an outbound packet (q_wire) and an inbound packet
+    (r_wire) so the same size/timing/direction features apply. Each visit gets
+    a unique synthetic client so it forms its own flow.
+    """
+    events = []
+    for visit, line in enumerate(open(path, encoding="utf-8")):
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        client = f"visit-{visit}"
+        for ev in rec.get("events", []):
+            t0 = float(ev.get("t_ms", 0.0)) / 1000.0
+            rtt = float(ev.get("rtt_ms", 0.0)) / 1000.0
+            events.append({
+                "ts": t0,
+                "length": int(ev.get("q_wire", 0)),
+                "direction": None,
+                "src_ip": client, "src_port": 53,
+                "dst_ip": "resolver", "dst_port": 853,
+            })
+            events.append({
+                "ts": t0 + rtt,
+                "length": int(ev.get("r_wire", 0)),
+                "direction": None,
+                "src_ip": "resolver", "src_port": 853,
+                "dst_ip": client, "dst_port": 53,
+            })
     return events
 
 
