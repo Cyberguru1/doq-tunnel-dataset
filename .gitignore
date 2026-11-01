@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+
+# built tool binaries (download/build at runtime)
+bin/
+
+# generated traffic and features (published separately, not committed)
+*.pcap
+*.pcapng
+*.csv
+*.parquet
+
+# local generation outputs (certs / keys)
+*.key
+*.pub
+*.pem
+server.key
+server.pub
+cert.pem
+key.pem

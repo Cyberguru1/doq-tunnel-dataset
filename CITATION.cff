@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this pipeline or the associated dataset in your work, please cite it as below."
+title: "DoQ Tunneling Detection — Pipeline and Dataset"
+authors:
+  - family-names: Saidu
+    given-names: Hamza
+    email: hamzasaidu34@gmail.com
+version: 0.1.0
+date-released: "2026-11-01"
+license: MIT
+keywords:
+  - DNS-over-QUIC
+  - DoQ
+  - DNS tunneling
+  - network security
+  - deep learning
+  - dataset
+repository-code: "https://github.com/Cyberguru1/doq-tunnel-dataset"
