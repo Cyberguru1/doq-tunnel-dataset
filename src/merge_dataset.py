@@ -80,16 +80,49 @@ def build(config):
     return out
 
 
+def balance_classes(df, ratio=1.0, seed=0):
+    """Subsample majority classes so no class exceeds ratio * (smallest class).
+
+    Uses random subsampling of real captured windows (not synthetic
+    oversampling) so the balanced CSV stays faithful to observed traffic.
+    ratio=1.0 gives an even split; ratio=2.0 keeps up to 2x the minority class.
+    """
+    counts = df["class"].value_counts()
+    cap = int(ratio * counts.min())
+    parts = []
+    for cls, g in df.groupby("class"):
+        if len(g) > cap:
+            g = g.sample(n=cap, random_state=seed)
+        parts.append(g)
+    out = pd.concat(parts, ignore_index=True)
+    return out.sample(frac=1.0, random_state=seed).reset_index(drop=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--balance", action="store_true",
+                    help="subsample majority classes toward the smallest class")
+    ap.add_argument("--balance-ratio", type=float, default=1.0,
+                    help="max class size as a multiple of the smallest class (default 1.0)")
+    ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
     with open(args.config) as fh:
         config = json.load(fh)
 
     df = build(config)
+
+    if args.balance:
+        full_out = args.out.replace(".csv", "_full.csv")
+        df.to_csv(full_out, index=False)
+        print(f"wrote {len(df)} unbalanced rows to {full_out}")
+        before = df["class"].value_counts().to_dict()
+        df = balance_classes(df, ratio=args.balance_ratio, seed=args.seed)
+        after = df["class"].value_counts().to_dict()
+        print(f"balanced (ratio={args.balance_ratio}): {before} -> {after}")
+
     df.to_csv(args.out, index=False)
     print(f"wrote {len(df)} rows to {args.out}")
     print(df.groupby(["class", "tool", "source"]).size().to_string())
