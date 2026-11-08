@@ -49,30 +49,83 @@ FEATURE_COLS = [
 
 
 def pcap_to_events(path):
-    """Read a pcap/pcapng and return a list of packet events."""
-    from scapy.all import rdpcap, IP, IPv6, UDP, TCP
+    """Read a pcap/pcapng into packet events.
+
+    Uses tshark (fast C parser) when available, which handles the large
+    high-volume tunnel captures that scapy's in-memory rdpcap cannot. Falls
+    back to scapy streaming (PcapReader, bounded memory) when tshark is absent.
+    """
+    import shutil
+
+    path = str(path)
+    if shutil.which("tshark"):
+        return _pcap_to_events_tshark(path)
+    return _pcap_to_events_scapy(path)
+
+
+def _pcap_to_events_tshark(path):
+    import subprocess
+
+    fields = ["frame.time_epoch", "frame.len",
+              "ip.src", "ipv6.src", "ip.dst", "ipv6.dst",
+              "udp.srcport", "tcp.srcport", "udp.dstport", "tcp.dstport"]
+    cmd = ["tshark", "-r", path, "-T", "fields"]
+    for f in fields:
+        cmd += ["-e", f]
+    cmd += ["-E", "separator=|", "-E", "occurrence=f"]
 
     events = []
-    for p in rdpcap(str(path)):
-        if IP in p:
-            src_ip, dst_ip = p[IP].src, p[IP].dst
-        elif IPv6 in p:
-            src_ip, dst_ip = p[IPv6].src, p[IPv6].dst
-        else:
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    for line in proc.stdout:
+        parts = line.rstrip("\n").split("|")
+        if len(parts) < 10:
             continue
-        if UDP in p:
-            src_port, dst_port = p[UDP].sport, p[UDP].dport
-        elif TCP in p:
-            src_port, dst_port = p[TCP].sport, p[TCP].dport
-        else:
+        ts, ln, ip4s, ip6s, ip4d, ip6d, usp, tsp, udp_sp, tcp_dp = parts
+        src_ip = ip4s or ip6s
+        dst_ip = ip4d or ip6d
+        src_port = usp or tsp
+        dst_port = udp_sp or tcp_dp
+        if not (src_ip and dst_ip and src_port and dst_port):
             continue
-        events.append({
-            "ts": float(p.time),
-            "length": int(len(p)),
-            "direction": None,
-            "src_ip": src_ip, "src_port": int(src_port),
-            "dst_ip": dst_ip, "dst_port": int(dst_port),
-        })
+        try:
+            events.append({
+                "ts": float(ts),
+                "length": int(ln),
+                "direction": None,
+                "src_ip": src_ip, "src_port": int(src_port),
+                "dst_ip": dst_ip, "dst_port": int(dst_port),
+            })
+        except ValueError:
+            continue
+    proc.wait()
+    return events
+
+
+def _pcap_to_events_scapy(path):
+    from scapy.all import PcapReader, IP, IPv6, UDP, TCP
+
+    events = []
+    with PcapReader(path) as pr:
+        for p in pr:
+            if IP in p:
+                src_ip, dst_ip = p[IP].src, p[IP].dst
+            elif IPv6 in p:
+                src_ip, dst_ip = p[IPv6].src, p[IPv6].dst
+            else:
+                continue
+            if UDP in p:
+                src_port, dst_port = p[UDP].sport, p[UDP].dport
+            elif TCP in p:
+                src_port, dst_port = p[TCP].sport, p[TCP].dport
+            else:
+                continue
+            events.append({
+                "ts": float(p.time),
+                "length": int(len(p)),
+                "direction": None,
+                "src_ip": src_ip, "src_port": int(src_port),
+                "dst_ip": dst_ip, "dst_port": int(dst_port),
+            })
     return events
 
 
