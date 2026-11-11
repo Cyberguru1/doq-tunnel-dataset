@@ -212,6 +212,9 @@ def main():
     feature_cols, class_names = df.attrs["feature_cols"], df.attrs["class_names"]
     log(f"loaded {len(df):,} records in {time.time()-t0:.1f}s; classes={dict(df['label_name'].value_counts())}")
     log(f"features ({len(feature_cols)}): {feature_cols}")
+    gs = df.groupby("label_name")["group"].agg(["nunique"])
+    gsize = df.groupby(["label_name", "group"]).size().groupby("label_name").describe()[["50%", "max"]]
+    log("session groups per class:\n" + gs.join(gsize).to_string())
 
     stride = args.stride or args.seq_len
     X, M, y, g, idx = make_sequences(df, feature_cols, args.seq_len, stride)
