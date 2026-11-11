@@ -43,7 +43,10 @@ TOOL_PATTERNS = {  # file/dir name -> tool class
 # CIRA-CIC-DoHBrw-2020
 # --------------------------------------------------------------------------- #
 def _find_csvs(root: str):
-    return sorted(glob.glob(os.path.join(root, "**", "*.csv"), recursive=True))
+    files = sorted(glob.glob(os.path.join(root, "**", "*.csv"), recursive=True))
+    if not files:  # parquet mirror (dhoogla/cicdohbrw2020 v3: no IPs, no per-tool files)
+        files = sorted(glob.glob(os.path.join(root, "**", "*.parquet"), recursive=True))
+    return files
 
 
 def _tool_from_path(p: str):
@@ -71,14 +74,18 @@ def load_cira(root: str, task: str = "tool", max_rows_per_class: int | None = No
     if task == "l1":
         for f in files:
             b = os.path.basename(f).lower()
-            if b.startswith("l1-doh"):
+            if "l1-doh-nondoh" in b:  # single mirror file, label inside
+                df = _read_cira(f, None); df["label_name"] = df["Label"].astype(str).str.lower(); frames.append(df)
+            elif b.startswith("l1-doh"):
                 frames.append(_read_cira(f, "doh"))
             elif b.startswith("l1-nondoh"):
                 frames.append(_read_cira(f, "nondoh"))
     elif task == "binary":
         for f in files:
             b = os.path.basename(f).lower()
-            if b.startswith("l2-benign"):
+            if "l2-benigndoh-maliciousdoh" in b:  # single mirror file, label inside
+                df = _read_cira(f, None); df["label_name"] = df["Label"].astype(str).str.lower(); frames.append(df)
+            elif b.startswith("l2-benign"):
                 frames.append(_read_cira(f, "benign"))
             elif b.startswith("l2-malicious"):
                 frames.append(_read_cira(f, "malicious"))
@@ -112,7 +119,7 @@ def load_cira(root: str, task: str = "tool", max_rows_per_class: int | None = No
 
 
 def _read_cira(path: str, label_name):
-    df = pd.read_csv(path, low_memory=False)
+    df = pd.read_parquet(path) if path.endswith(".parquet") else pd.read_csv(path, low_memory=False)
     df.columns = [c.strip() for c in df.columns]
     if label_name is not None:
         df["label_name"] = label_name
@@ -122,10 +129,16 @@ def _read_cira(path: str, label_name):
 
 def _finalize_cira(df: pd.DataFrame) -> pd.DataFrame:
     # session key: client<->resolver pair; order inside it by timestamp
-    df["group"] = (df["SourceIP"].astype(str) + ">" + df["DestinationIP"].astype(str)
-                   + "|" + df["label_name"].astype(str))
-    ts = pd.to_datetime(df["TimeStamp"], errors="coerce")
-    df["ts"] = (ts - ts.min()).dt.total_seconds().fillna(0.0)
+    if "SourceIP" in df.columns and "DestinationIP" in df.columns:
+        df["group"] = (df["SourceIP"].astype(str) + ">" + df["DestinationIP"].astype(str)
+                       + "|" + df["label_name"].astype(str))
+    else:  # no session identifiers in this mirror -> per-record groups (seq_len must be 1)
+        df["group"] = np.arange(len(df)).astype(str)
+    if "TimeStamp" in df.columns:
+        ts = pd.to_datetime(df["TimeStamp"], errors="coerce")
+        df["ts"] = (ts - ts.min()).dt.total_seconds().fillna(0.0)
+    else:
+        df["ts"] = 0.0
     feat = [c for c in df.columns
             if c not in CIRA_ID_COLS + ["label_name", "src_file", "group", "ts", "label"]]
     df[feat] = df[feat].apply(pd.to_numeric, errors="coerce")
