@@ -73,10 +73,11 @@ class TimeDistributedDilatedConv(nn.Module):
         self.proj = nn.Sequential(
             nn.Flatten(),  # (N, C*F)
             nn.Linear(channels * n_features, embed_dim),
-            nn.LayerNorm(embed_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
         )
+        # enhanced variant: residual input skip (raw feature vector -> embedding) so the
+        # per-step embedding is at least as expressive as a linear/MLP encoder.
+        self.in_skip = nn.Linear(n_features, embed_dim) if residual else None
+        self.post = nn.Sequential(nn.LayerNorm(embed_dim), nn.GELU(), nn.Dropout(dropout))
 
     def forward(self, x):  # x: (B, T, F)
         B, T, Fd = x.shape
@@ -91,6 +92,9 @@ class TimeDistributedDilatedConv(nn.Module):
         if self.residual:
             h = sum(f(o) for f, o in zip(self.fuse, outs))  # multi-scale fusion
         e = self.proj(h)                     # (B*T, embed_dim)
+        if self.in_skip is not None:
+            e = e + self.in_skip(x.reshape(B * T, Fd))
+        e = self.post(e)
         return e.reshape(B, T, -1)
 
 
