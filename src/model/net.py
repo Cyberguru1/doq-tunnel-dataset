@@ -39,7 +39,7 @@ class DilatedConvBlock(nn.Module):
         super().__init__()
         pad = dilation  # (k-1)/2 * dilation with k=3
         self.conv = nn.Conv1d(c_in, c_out, kernel_size=3, dilation=dilation, padding=pad)
-        self.bn = nn.BatchNorm1d(c_out)
+        self.bn = nn.GroupNorm(1, c_out)  # batch-independent (BatchNorm gave train/eval mismatch with PLE tokens)
         self.drop = nn.Dropout(dropout)
 
     def forward(self, x):  # x: (N, C, L)
