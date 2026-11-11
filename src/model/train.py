@@ -81,10 +81,27 @@ def to_flow_level(pred_windows, proba_windows, idx_windows, mask, n_rows):
 
 
 # --------------------------------------------------------------------------- #
-def train_one(X, M, y, idx_tr, idx_va, idx_te, args, class_names, device, log):
+def expand_train_windows(df, feature_cols, seq_len, train_stride, train_rows, label_of_row):
+    """Sliding (overlapping) windows for TRAINING only: every window of `seq_len`
+    consecutive flows (stride `train_stride`) whose flows ALL belong to the
+    training partition. Test/val windows stay non-overlapping, so no flow is
+    shared between train and evaluation."""
+    Xw, Mw, yw, gw, iw = make_sequences(df, feature_cols, seq_len, train_stride)
+    ok = np.isin(iw, train_rows) | (iw < 0)
+    keep = ok.all(1)
+    return Xw[keep], Mw[keep], yw[keep]
+
+
+def train_one(X, M, y, idx_tr, idx_va, idx_te, args, class_names, device, log, extra_train=None):
     n_features, n_classes = X.shape[-1], len(class_names)
     scaler = FeatureScaler(log_compress=not args.no_log).fit(X[idx_tr], M[idx_tr])
     Xs = scaler.transform(X, M)
+    if extra_train is not None:  # overlapping training windows appended after the originals
+        Xe, Me, ye = extra_train
+        n0 = len(Xs)
+        Xs = np.concatenate([Xs, scaler.transform(Xe, Me)]); M = np.concatenate([M, Me]); y = np.concatenate([y, ye])
+        idx_tr = np.concatenate([idx_tr, np.arange(n0, n0 + len(Xe))])
+        log(f"training windows: {len(idx_tr):,} (incl. {len(Xe):,} overlapping, stride={args.train_stride})")
 
     edges = None
     if args.feat_embed == "ple":
@@ -172,6 +189,8 @@ def main():
     ap.add_argument("--task", default="tool", help="cira: l1|binary|tool ; doq: binary|tool")
     ap.add_argument("--seq-len", type=int, default=1)
     ap.add_argument("--stride", type=int, default=None, help="default = seq_len (non-overlapping windows)")
+    ap.add_argument("--train-stride", type=int, default=0,
+                    help="if >0 and < seq_len: add overlapping sliding windows (this stride) built only from training flows")
     ap.add_argument("--split", choices=["stratified", "group"], default="stratified")
     ap.add_argument("--test-size", type=float, default=0.2)
     ap.add_argument("--val-size", type=float, default=0.1)
@@ -246,7 +265,11 @@ def main():
             tr, va = train_val_split(y[trval], g[trval], args.split, args.val_size, args.seed + k)
             tr, va = trval[tr], trval[va]
         log(f"--- fold {k}: train {len(tr):,} val {len(va):,} test {len(te):,}")
-        model, scaler, pt, history, best_epoch = train_one(X, M, y, tr, va, te, args, class_names, device, log)
+        extra = None
+        if args.train_stride and args.seq_len > 1 and args.train_stride < args.seq_len:
+            train_rows = idx[tr][M[tr]]
+            extra = expand_train_windows(df, feature_cols, args.seq_len, args.train_stride, train_rows, None)
+        model, scaler, pt, history, best_epoch = train_one(X, M, y, tr, va, te, args, class_names, device, log, extra)
 
         mw = metrics_from_preds(y[te], pt.argmax(1), class_names, pt)
         mw["best_epoch"] = best_epoch
