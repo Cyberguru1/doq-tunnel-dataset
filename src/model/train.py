@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 from data import (FeatureScaler, augment, load_cira, load_doq, make_sequences,  # noqa: E402
                   split_indices, train_val_split)
-from net import build_model, count_params  # noqa: E402
+from net import build_model, count_params, quantile_bin_edges  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -86,10 +86,13 @@ def train_one(X, M, y, idx_tr, idx_va, idx_te, args, class_names, device, log):
     scaler = FeatureScaler(log_compress=not args.no_log).fit(X[idx_tr], M[idx_tr])
     Xs = scaler.transform(X, M)
 
+    edges = None
+    if args.feat_embed == "ple":
+        edges = quantile_bin_edges(Xs[idx_tr][M[idx_tr]], args.ple_bins)
     model = build_model(n_features, n_classes, variant=args.variant,
                         channels=args.channels, embed_dim=args.embed_dim,
                         lstm_hidden=args.lstm_hidden, lstm_layers=args.lstm_layers,
-                        dropout=args.dropout).to(device)
+                        dropout=args.dropout, bin_edges=edges, token_dim=args.token_dim).to(device)
     log(f"model={args.variant} params={count_params(model):,} T={X.shape[1]} F={n_features} classes={class_names}")
 
     counts = np.bincount(y[idx_tr], minlength=n_classes).astype(np.float64)
@@ -98,8 +101,11 @@ def train_one(X, M, y, idx_tr, idx_va, idx_te, args, class_names, device, log):
                                label_smoothing=args.label_smoothing)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     steps_per_epoch = int(np.ceil(len(idx_tr) / args.batch_size))
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, epochs=args.epochs,
-                                                steps_per_epoch=steps_per_epoch, pct_start=0.15)
+    if args.sched == "onecycle":
+        sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, epochs=args.epochs,
+                                                    steps_per_epoch=steps_per_epoch, pct_start=0.15)
+    else:
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs * steps_per_epoch, eta_min=args.lr * 0.02)
     use_amp = device.type == "cuda"
     scaler_amp = torch.amp.GradScaler("cuda", enabled=use_amp)
     rng = np.random.default_rng(args.seed)
@@ -177,6 +183,11 @@ def main():
     ap.add_argument("--lstm-hidden", type=int, default=96)
     ap.add_argument("--lstm-layers", type=int, default=1)
     ap.add_argument("--dropout", type=float, default=0.2)
+    ap.add_argument("--feat-embed", choices=["none", "ple"], default="none",
+                    help="ple = piecewise-linear quantile embeddings of each flow statistic (feature tokens)")
+    ap.add_argument("--ple-bins", type=int, default=16)
+    ap.add_argument("--token-dim", type=int, default=8)
+    ap.add_argument("--sched", choices=["onecycle", "cosine"], default="onecycle")
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--patience", type=int, default=8)
     ap.add_argument("--batch-size", type=int, default=512)

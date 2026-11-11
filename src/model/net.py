@@ -46,6 +46,30 @@ class DilatedConvBlock(nn.Module):
         return self.drop(F.gelu(self.bn(self.conv(x))))
 
 
+class PiecewiseLinearEmbedding(nn.Module):
+    """Per-feature piecewise-linear encoding on training-set quantile bins
+    (Gorishniy et al., "On Embeddings for Numerical Features in Tabular Deep
+    Learning", NeurIPS 2022) followed by a per-feature linear map to d_token.
+
+    Turns each scalar flow statistic into a d_token vector, so the dilated conv
+    stack sees a sequence of F feature *tokens* instead of a raw 1-channel signal.
+    Input (N, F) -> output (N, d_token, F).
+    """
+
+    def __init__(self, bin_edges: torch.Tensor, d_token: int):
+        super().__init__()
+        self.register_buffer("edges", bin_edges.float())        # (F, K+1)
+        F_, K = bin_edges.shape[0], bin_edges.shape[1] - 1
+        self.weight = nn.Parameter(torch.randn(F_, K, d_token) * 0.05)
+        self.bias = nn.Parameter(torch.zeros(F_, d_token))
+
+    def forward(self, x):  # (N, F)
+        lo, hi = self.edges[:, :-1], self.edges[:, 1:]
+        t = ((x.unsqueeze(-1) - lo) / (hi - lo).clamp_min(1e-6)).clamp(0.0, 1.0)  # (N, F, K)
+        e = torch.einsum("nfk,fkd->nfd", t, self.weight) + self.bias           # (N, F, d)
+        return e.transpose(1, 2)                                               # (N, d, F)
+
+
 class TimeDistributedDilatedConv(nn.Module):
     """Shared dilated-conv stack applied independently to every time step.
 
@@ -59,11 +83,13 @@ class TimeDistributedDilatedConv(nn.Module):
     """
 
     def __init__(self, n_features: int, channels: int = 32, dilations=(1, 2, 4),
-                 embed_dim: int = 128, dropout: float = 0.1, residual: bool = True):
+                 embed_dim: int = 128, dropout: float = 0.1, residual: bool = True,
+                 feat_embed: nn.Module | None = None, token_dim: int = 1):
         super().__init__()
         self.residual = residual
+        self.feat_embed = feat_embed
         blocks, fuse = [], []
-        c_in = 1
+        c_in = token_dim if feat_embed is not None else 1
         for d in dilations:
             blocks.append(DilatedConvBlock(c_in, channels, d, dropout))
             fuse.append(nn.Conv1d(channels, channels, kernel_size=1))
@@ -81,7 +107,8 @@ class TimeDistributedDilatedConv(nn.Module):
 
     def forward(self, x):  # x: (B, T, F)
         B, T, Fd = x.shape
-        h = x.reshape(B * T, 1, Fd)          # time-distributed: fold T into batch
+        flat = x.reshape(B * T, Fd)          # time-distributed: fold T into batch
+        h = self.feat_embed(flat) if self.feat_embed is not None else flat.unsqueeze(1)
         outs = []
         for i, blk in enumerate(self.blocks):
             h_new = blk(h)
@@ -93,7 +120,7 @@ class TimeDistributedDilatedConv(nn.Module):
             h = sum(f(o) for f, o in zip(self.fuse, outs))  # multi-scale fusion
         e = self.proj(h)                     # (B*T, embed_dim)
         if self.in_skip is not None:
-            e = e + self.in_skip(x.reshape(B * T, Fd))
+            e = e + self.in_skip(flat)
         e = self.post(e)
         return e.reshape(B, T, -1)
 
@@ -118,11 +145,13 @@ class DilatedResBiLSTM(nn.Module):
 
     def __init__(self, n_features: int, n_classes: int, channels: int = 32,
                  dilations=(1, 2, 4), embed_dim: int = 128, lstm_hidden: int = 96,
-                 lstm_layers: int = 1, dropout: float = 0.2, residual: bool = True):
+                 lstm_layers: int = 1, dropout: float = 0.2, residual: bool = True,
+                 bin_edges: torch.Tensor | None = None, token_dim: int = 8):
         super().__init__()
         self.residual = residual
+        fe = PiecewiseLinearEmbedding(bin_edges, token_dim) if bin_edges is not None else None
         self.frontend = TimeDistributedDilatedConv(
-            n_features, channels, dilations, embed_dim, dropout, residual)
+            n_features, channels, dilations, embed_dim, dropout, residual, fe, token_dim)
         self.lstm = nn.LSTM(embed_dim, lstm_hidden, num_layers=lstm_layers,
                             batch_first=True, bidirectional=True,
                             dropout=dropout if lstm_layers > 1 else 0.0)
@@ -162,11 +191,23 @@ def build_model(n_features: int, n_classes: int, variant: str = "enhanced", **kw
     return DilatedResBiLSTM(n_features, n_classes, residual=(variant == "enhanced"), **kw)
 
 
+def quantile_bin_edges(X: "np.ndarray", n_bins: int = 16) -> torch.Tensor:
+    """Per-feature quantile bin edges from (already scaled) training rows X (N, F)."""
+    import numpy as np
+    qs = np.linspace(0, 1, n_bins + 1)
+    edges = np.quantile(X, qs, axis=0).T  # (F, K+1)
+    edges = np.maximum.accumulate(edges, axis=1)  # monotone
+    return torch.tensor(edges, dtype=torch.float32)
+
+
 def count_params(m: nn.Module) -> int:
     return sum(p.numel() for p in m.parameters() if p.requires_grad)
 
 
 if __name__ == "__main__":
+    import numpy as np
+    m = build_model(28, 4, bin_edges=quantile_bin_edges(np.random.randn(500, 28), 16))
+    print(m(torch.randn(5, 8, 28)).shape, count_params(m), "params (PLE)")
     m = build_model(28, 4)
     x = torch.randn(5, 8, 28)
     print(m(x).shape, count_params(m), "params")
