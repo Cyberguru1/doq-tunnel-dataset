@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 # DoHMeter identifier / non-feature columns in CIRA-CIC-DoHBrw-2020.
-CIRA_ID_COLS = ["SourceIP", "DestinationIP", "SourcePort", "DestinationPort", "TimeStamp", "Label"]
+CIRA_ID_COLS = ["SourceIP", "DestinationIP", "SourcePort", "DestinationPort", "TimeStamp", "Label", "DoH"]
 
 TOOL_PATTERNS = {  # file/dir name -> tool class
     "dns2tcp": "dns2tcp",
@@ -121,6 +121,14 @@ def load_cira(root: str, task: str = "tool", max_rows_per_class: int | None = No
 def _read_cira(path: str, label_name):
     df = pd.read_parquet(path) if path.endswith(".parquet") else pd.read_csv(path, low_memory=False)
     df.columns = [c.strip() for c in df.columns]
+    if "DoH" in df.columns:
+        # per-tool / per-browser DoHMeter CSVs carry a boolean 'DoH' column instead of 'Label'.
+        # Keep only DoH flows (this is exactly how the official l2-*.csv files were derived) and
+        # never let the column reach the feature set.
+        is_doh = df["DoH"].astype(str).str.strip().str.lower().isin(["true", "1", "1.0"])
+        n0 = len(df)
+        df = df[is_doh].copy()
+        print(f"  {os.path.basename(path)}: kept {len(df):,} DoH flows of {n0:,} (DoH column dropped)")
     if label_name is not None:
         df["label_name"] = label_name
     df["src_file"] = os.path.basename(path)
